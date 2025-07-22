@@ -6,9 +6,9 @@ import { observable } from "@trpc/server/observable";
 import { Z_Update, Update, Z_Account, Account } from "./schemas";
 import express from "express";
 import { initTRPC } from "@trpc/server";
-import { ExpressAuth } from "@auth/express";
-import { db, accountsTable, updatesTable } from "./drizzle";
+import { db, updates } from "./drizzle";
 import { eq } from "drizzle-orm";
+import { auth } from "./auth";
 
 // create a global event emitter
 const eventEmitter = new EventEmitter();
@@ -23,6 +23,7 @@ const publicProcedure = t.procedure;
 
 // express things
 const app = express();
+app.use(express.json());
 
 const appRouter = router({
   onPost: publicProcedure.subscription(() => {
@@ -42,13 +43,13 @@ const appRouter = router({
     .input(z.object({ update: Z_Update }))
     .mutation(async ({ input }) => {
       // create the post in the db here
-      await db.insert(updatesTable).values(input.update)
+      await db.insert(updates).values(input.update)
       // const newPost = await prisma.update.create({ data: input.update });
     }),
   getFeed: publicProcedure.input(z.number()).query(async (opts) => {
     const { input } = opts;
     // fetch the N most recent posts from the database and return them to the user
-    const latestUpdates = await db.select().from(updatesTable)
+    const latestUpdates = await db.select().from(updates)
     // const latestUpdates = await prisma.update.findMany();
     // const latestUpdates = await prisma.update.findMany({
       // take: input,
@@ -62,7 +63,7 @@ const appRouter = router({
     .mutation(async (opts) => {
       const { input } = opts;
       // update a post with the specified ID
-      await db.update(updatesTable).set(input.body).where(eq(updatesTable.id, input.id))
+      await db.update(updates).set(input.body).where(eq(updates.id, input.id))
     }),
 });
 
@@ -76,6 +77,41 @@ app.use(
     createContext
   }),
 )
+
+app.get("/", (req, res) => {
+  res.json({ success: true, message: "Hello World" });
+});
+
+app.post("/auth/signup", async (req, res) => {
+  const body = req.body;
+  try {
+    const data = await auth.api.signInMagicLink({
+      body: {
+        email: body.email,
+      },
+      headers: req.headers
+    });
+
+    res.json({ success: true, data });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+app.get("/api/auth/magic-link/verify", async (req, res) => {
+  try {
+    const data = await auth.api.magicLinkVerify({
+      query: {
+        token: req.query.token,
+      },
+      headers: req.headers,
+    });
+
+    res.json({ success: true, data });
+  } catch {
+    res.json({ success: false });
+  }
+});
 
 // app.use("/auth/*", ExpressAuth({
 //   providers: [
