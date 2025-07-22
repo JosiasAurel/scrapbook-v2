@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { magicLink } from "better-auth/plugins";
+import { magicLink, bearer } from "better-auth/plugins";
 import { db } from "./drizzle";
 import { sendEmail } from "./email";
 import { updates, users, sessions, accounts, verifications } from "./drizzle";
@@ -37,7 +37,8 @@ export const auth = betterAuth({
                     htmlBody: `Click the link to log into scrapbookv2: ${url}`
                 })
             }
-        })
+        }),
+        bearer()
     ],
 })
 

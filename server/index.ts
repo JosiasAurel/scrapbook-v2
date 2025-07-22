@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { observable } from "@trpc/server/observable";
 import { Z_Update, Update, Z_Account, Account } from "./schemas";
 import express from "express";
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import { db, updates } from "./drizzle";
 import { eq } from "drizzle-orm";
 import { auth } from "./auth";
@@ -13,20 +13,37 @@ import { auth } from "./auth";
 // create a global event emitter
 const eventEmitter = new EventEmitter();
 
-const createContext = ({ req, res}: trpcExpress.CreateExpressContextOptions) => ({})
+const createContext = async ({ req, res}: trpcExpress.CreateExpressContextOptions) => {
+  const data = await auth.api.getSession({ headers: req.headers });
+  if (data == null) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "No token provided" });
+  }
+  return { user: data.user }
+}
+
 type Context = Awaited<ReturnType<typeof createContext>>;
 
 const t = initTRPC.context<Context>().create();
 
+const protectedProcedure = t.procedure.use(async (opts) => {
+    const { ctx } = opts;
+    return opts.next({
+      ctx: {
+        user: ctx.user,
+      },
+    });
+})
+
+
 const router = t.router;
-const publicProcedure = t.procedure;
+// const protectedProcedure = t.procedure;
 
 // express things
 const app = express();
 app.use(express.json());
 
 const appRouter = router({
-  onPost: publicProcedure.subscription(() => {
+  onPost: protectedProcedure.subscription(() => {
     return observable<Update>((emit) => {
       const onPost = (data: Update) => {
         emit.next(data);
@@ -39,32 +56,29 @@ const appRouter = router({
       };
     });
   }),
-  createPost: publicProcedure
+  createPost: protectedProcedure
     .input(z.object({ update: Z_Update }))
     .mutation(async ({ input }) => {
       // create the post in the db here
       await db.insert(updates).values(input.update)
       // const newPost = await prisma.update.create({ data: input.update });
     }),
-  getFeed: publicProcedure.input(z.number()).query(async (opts) => {
-    const { input } = opts;
-    // fetch the N most recent posts from the database and return them to the user
+  getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
     const latestUpdates = await db.select().from(updates)
-    // const latestUpdates = await prisma.update.findMany();
-    // const latestUpdates = await prisma.update.findMany({
-      // take: input,
-      // orderBy: { postTime: "desc" },
-    // });
 
     return latestUpdates;
   }),
-  editPost: publicProcedure
+  editPost: protectedProcedure
     .input(z.object({ id: z.number(), body: Z_Update }))
     .mutation(async (opts) => {
       const { input } = opts;
       // update a post with the specified ID
       await db.update(updates).set(input.body).where(eq(updates.id, input.id))
     }),
+  greet: protectedProcedure.query(async (opts) => {
+    console.log("greeting", opts.ctx.user);
+    return { success: true, message: "Hello World" };
+  })
 });
 
 export type AppRouter = typeof appRouter;
@@ -108,8 +122,8 @@ app.get("/api/auth/magic-link/verify", async (req, res) => {
     });
 
     res.json({ success: true, data });
-  } catch {
-    res.json({ success: false });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
   }
 });
 
