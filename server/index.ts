@@ -1,16 +1,31 @@
 // import { publicProcedure, router } from "./trpc";
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { z } from "zod";
-import { EventEmitter } from "node:events";
+import { EventEmitter, on } from "node:events";
 import { Update, Account } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { db, updates, reactions } from "./drizzle";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
 
 // create a global event emitter
-const eventEmitter = new EventEmitter();
+const ee = new EventEmitter();
+type EventMap<T> = Record<keyof T, any[]>;
+class IterableEventEmitter<T extends EventMap<T>> extends EventEmitter<T> {
+  toIterable<TEventName extends keyof T & string>(
+    eventName: TEventName,
+    opts?: NonNullable<Parameters<typeof on>[2]>,
+  ): AsyncIterable<T[TEventName]> {
+    return on(this as any, eventName, opts) as any;
+  }
+}
+
+export interface ScrapbookEvents {
+  createPost: [postId: string, data: any]
+}
+
+const eventEmitter = new IterableEventEmitter<ScrapbookEvents>();
 
 const createContext = async ({ req, res}: trpcExpress.CreateExpressContextOptions) => {
   const data = await auth.api.getSession({ headers: req.headers });
@@ -24,7 +39,8 @@ type Context = Awaited<ReturnType<typeof createContext>>;
 
 const t = initTRPC.context<Context>().create();
 
-const protectedProcedure = t.procedure.use(async (opts) => {
+const publicProcedure = t.procedure;
+const protectedProcedure = publicProcedure.use(async (opts) => {
     const { ctx } = opts;
     return opts.next({
       ctx: {
@@ -46,7 +62,10 @@ const appRouter = router({
     .input(z.object({ update: Update }))
     .mutation(async ({ ctx, input }) => {
       // create the post in the db here
-      await db.insert(updates).values({ ...input.update, userId: ctx.user.id })
+      const [ newPost ] = await db.insert(updates).values({ ...input.update, userId: ctx.user.id }).returning();
+
+      // emit a create post event
+      eventEmitter.emit("createPost", newPost.id.toString(), newPost);
     }),
   getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
     const latestUpdates = await db.select().from(updates).limit(50).orderBy(desc(updates.postTime))
