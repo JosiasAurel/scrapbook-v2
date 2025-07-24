@@ -114,6 +114,38 @@ const appRouter = router({
     // delete the reaction
     await db.delete(reactions).where(and(eq(reactions.updateId, input.postId), eq(reactions.userId, ctx.user.id)));
   }),
+  onPost: protectedProcedure.input(z.object({ lastPostId: z.number().nullish(), })).subscription(async function* (opts) {
+    const { ctx, input } = opts;
+    const { lastPostId } = input;
+    
+    eventEmitter.toIterable("createPost", {
+
+      signal: opts.signal
+    });
+
+    let lastPostCreatedTime;
+
+    if (lastPostId) {
+      // get the post time of the post with the last id
+      const [ postWithId ] = await db.select().from(updates).where(eq(updates.id, lastPostId));
+      lastPostCreatedTime = postWithId.postTime; 
+    } else {
+      const [ lastPost ] = await db.select().from(updates).orderBy(desc(updates.postTime)).limit(1);
+      lastPostCreatedTime = lastPost.postTime;
+    }
+
+   const latestPosts = await db.select().from(updates).where(gt(updates.postTime, lastPostCreatedTime));
+
+    function* maybeYield(post: z.infer<typeof Update>) {
+      if (post.postTime > lastPostCreatedTime) {
+        yield post;
+      }
+    }
+
+    for (const post of latestPosts) {
+      yield maybeYield(post as any); // TODO: @Josias should do a proper type casting here
+    }
+  }),
   greet: protectedProcedure.query(async (opts) => {
     console.log("greeting", opts.ctx.user);
     return { success: true, message: "Hello World" };
