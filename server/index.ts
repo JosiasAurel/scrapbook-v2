@@ -54,11 +54,30 @@ const appRouter = router({
     return latestUpdates;
   }),
   editPost: protectedProcedure
-    .input(z.object({ id: z.number(), body: Z_Update }))
+    .input(z.object({ id: z.number(), body: Update }))
     .mutation(async (opts) => {
-      const { input } = opts;
+      const { input, ctx } = opts;
+
+      // verify and make sure the post belongs to the user
+      const post = await db.select().from(updates).where(eq(updates.id, input.id));
+      if (post[0].userId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "You are not allowed to edit this post" });
+      }
+
       // update a post with the specified ID
       await db.update(updates).set(input.body).where(eq(updates.id, input.id))
+    }),
+    deletePost: protectedProcedure.input(z.object({ id: z.number()})).mutation(async (opts) => {
+      const { input, ctx } = opts;
+
+      // verify and make sure the post belongs to the user
+      const post = await db.select().from(updates).where(eq(updates.id, input.id));
+      if (post[0].userId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "You are not allowed to delete this post" });
+      }
+
+      // delete the post
+      await db.delete(updates).where(eq(updates.id, input.id));
     }),
   greet: protectedProcedure.query(async (opts) => {
     console.log("greeting", opts.ctx.user);
@@ -68,7 +87,6 @@ const appRouter = router({
 
 export type AppRouter = typeof appRouter;
 
-// export { appRouter };
 app.use(
   "/trpc",
   trpcExpress.createExpressMiddleware({
