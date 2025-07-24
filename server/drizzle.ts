@@ -18,7 +18,8 @@ export const updates = sqliteTable("updates_table", {
     postTime: int().notNull(), // timestamp
     text: text().notNull(),
     attachments: text(),
-    source: text().notNull() // string representing the client which sent the update
+    source: text().notNull(), // string representing the client which sent the update
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" })
 });
 
 export const users = sqliteTable("users", {
