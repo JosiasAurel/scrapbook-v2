@@ -2,8 +2,7 @@
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { z } from "zod";
 import { EventEmitter } from "node:events";
-import { observable } from "@trpc/server/observable";
-import { Z_Update, Update, Z_Account, Account } from "./schemas";
+import { Update, Account } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { db, updates } from "./drizzle";
@@ -126,13 +125,6 @@ app.get("/api/auth/magic-link/verify", async (req, res) => {
     res.json({ success: false, error: err.message });
   }
 });
-
-// app.use("/auth/*", ExpressAuth({
-//   providers: [
-
-//   ],
-//   adapter: PrismaAdapter(prisma)
-// }))
 
 app.listen(3000, () => console.log("Server running"));
 
