@@ -1,26 +1,7 @@
 import { db } from "./drizzle";
 import { z } from "zod";
 
-export type Update = {
-  id: string,
-  postTime: number,
-  text: string,
-  // attachments: string[],
-  attachments: string,
-  source: string,
-}
-
-export type Account = {
-  id: string,
-  email: string,
-  emailVerified: boolean,
-  username: string,
-  streakCount: number,
-  timezone: string,
-  updates: Update[]
-}
-
-export const Z_Account = z.object({
+export const Account = z.object({
   id: z.number(),
   email: z.string(),
   emailVerified: z.date().default(() => new Date()),
@@ -29,15 +10,11 @@ export const Z_Account = z.object({
   timezone: z.string(),
 })
 
-export const Z_Update = z.object({
+export const Update = z.object({
   id: z.number(),
-  postTime: z.number(),
-  // postTime: z.preprocess(arg => {
-  //   if (typeof arg === 'string' || arg instanceof Date) return new Date(arg)
-  // }, z.date()),
-
+  postTime: z.number(), // timestamp
   text: z.string(),
-  attachments: z.string(),
+  attachments: z.string(), // json stringified array of attachments
   source: z.string(),
   accountId: z.string(),
 })
