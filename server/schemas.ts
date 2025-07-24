@@ -18,3 +18,10 @@ export const Update = z.object({
   source: z.string(),
   accountId: z.string(),
 })
+
+export const Reaction = z.object({
+  id: z.number(),
+  reactionTime: z.number(), // timestamp
+  reaction: z.string(),
+  userId: z.number()
+})
