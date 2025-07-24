@@ -86,5 +86,12 @@ export const verifications = sqliteTable("verifications", {
   ),
 });
 
+export const reactions = sqliteTable("reactions", {
+  id: int().primaryKey({ autoIncrement: true }),
+  updateId: int().notNull().references(() => updates.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  reaction: text("reaction").notNull(),
+});
+
 export const db = drizzle(process.env.DB_FILE_NAME!);
 

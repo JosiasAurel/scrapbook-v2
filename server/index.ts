@@ -5,8 +5,8 @@ import { EventEmitter } from "node:events";
 import { Update, Account } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError } from "@trpc/server";
-import { db, updates } from "./drizzle";
-import { eq } from "drizzle-orm";
+import { db, updates, reactions } from "./drizzle";
+import { eq, and } from "drizzle-orm";
 import { auth } from "./auth";
 
 // create a global event emitter
@@ -79,6 +79,22 @@ const appRouter = router({
       // delete the post
       await db.delete(updates).where(eq(updates.id, input.id));
     }),
+  reactToPost: protectedProcedure.input(z.object({ postId: z.number(), reaction: z.string()})).mutation(async (opts) => {
+    const { input, ctx } = opts;
+
+    // check if the user has already reacted to this post with this reaction
+    const reaction = await db.select().from(reactions).where(and(eq(reactions.updateId, input.postId), eq(reactions.userId, ctx.user.id)));
+    if (reaction.length == 0) {
+      // create the reaction
+      await db.insert(reactions).values({ updateId: input.postId, userId: ctx.user.id, reaction: input.reaction });
+    }
+  }),
+  unreactToPost: protectedProcedure.input(z.object({ postId: z.number()})).mutation(async (opts) => {
+    const { input, ctx } = opts;
+
+    // delete the reaction
+    await db.delete(reactions).where(and(eq(reactions.updateId, input.postId), eq(reactions.userId, ctx.user.id)));
+  }),
   greet: protectedProcedure.query(async (opts) => {
     console.log("greeting", opts.ctx.user);
     return { success: true, message: "Hello World" };
