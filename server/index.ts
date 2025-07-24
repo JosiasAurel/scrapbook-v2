@@ -4,7 +4,7 @@ import { z } from "zod";
 import { EventEmitter, on } from "node:events";
 import { Update, Account } from "./schemas";
 import express from "express";
-import { initTRPC, TRPCError } from "@trpc/server";
+import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import { db, updates, reactions } from "./drizzle";
 import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
@@ -118,8 +118,7 @@ const appRouter = router({
     const { ctx, input } = opts;
     const { lastPostId } = input;
     
-    eventEmitter.toIterable("createPost", {
-
+    const eePostIterable = eventEmitter.toIterable("createPost", {
       signal: opts.signal
     });
 
@@ -138,12 +137,17 @@ const appRouter = router({
 
     function* maybeYield(post: z.infer<typeof Update>) {
       if (post.postTime > lastPostCreatedTime) {
-        yield post;
+        yield tracked(post.id.toString(), post);
       }
     }
 
     for (const post of latestPosts) {
-      yield maybeYield(post as any); // TODO: @Josias should do a proper type casting here
+      yield* maybeYield(post as any); // TODO: @Josias should do a proper type casting here
+    }
+
+    // also return new messages from event emitter
+    for await (const [ _, postData ] of eePostIterable) {
+      yield* maybeYield(postData);
     }
   }),
   greet: protectedProcedure.query(async (opts) => {
