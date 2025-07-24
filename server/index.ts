@@ -6,7 +6,7 @@ import { Update, Account } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { db, updates, reactions } from "./drizzle";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { auth } from "./auth";
 
 // create a global event emitter
@@ -49,7 +49,7 @@ const appRouter = router({
       await db.insert(updates).values({ ...input.update, userId: ctx.user.id })
     }),
   getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
-    const latestUpdates = await db.select().from(updates)
+    const latestUpdates = await db.select().from(updates).limit(50).orderBy(desc(updates.postTime))
 
     return latestUpdates;
   }),
