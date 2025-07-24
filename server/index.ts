@@ -42,25 +42,11 @@ const app = express();
 app.use(express.json());
 
 const appRouter = router({
-  onPost: protectedProcedure.subscription(() => {
-    return observable<Update>((emit) => {
-      const onPost = (data: Update) => {
-        emit.next(data);
-      };
-
-      eventEmitter.on("update", onPost);
-
-      return () => {
-        eventEmitter.off("update", onPost);
-      };
-    });
-  }),
   createPost: protectedProcedure
-    .input(z.object({ update: Z_Update }))
-    .mutation(async ({ input }) => {
+    .input(z.object({ update: Update }))
+    .mutation(async ({ ctx, input }) => {
       // create the post in the db here
-      await db.insert(updates).values(input.update)
-      // const newPost = await prisma.update.create({ data: input.update });
+      await db.insert(updates).values({ ...input.update, userId: ctx.user.id })
     }),
   getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
     const latestUpdates = await db.select().from(updates)
