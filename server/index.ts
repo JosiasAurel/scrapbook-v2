@@ -1,16 +1,15 @@
-// import { publicProcedure, router } from "./trpc";
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { z } from "zod";
 import { EventEmitter, on } from "node:events";
-import { Update, Account } from "./schemas";
+import { Update, Reaction } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import { db, updates, reactions } from "./drizzle";
 import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
+import { v4 as uuidv4 } from "uuid";
+import { uploadAttachment } from "./s3";
 
-// create a global event emitter
-const ee = new EventEmitter();
 type EventMap<T> = Record<keyof T, any[]>;
 class IterableEventEmitter<T extends EventMap<T>> extends EventEmitter<T> {
   toIterable<TEventName extends keyof T & string>(
@@ -22,9 +21,11 @@ class IterableEventEmitter<T extends EventMap<T>> extends EventEmitter<T> {
 }
 
 export interface ScrapbookEvents {
-  createPost: [postId: string, data: any]
+  createPost: [postId: string, data: any],
+  reactToPost: [reactionId: string, data: any]
 }
 
+// create a global event emitter
 const eventEmitter = new IterableEventEmitter<ScrapbookEvents>();
 
 const createContext = async ({ req, res}: trpcExpress.CreateExpressContextOptions) => {
@@ -61,8 +62,20 @@ const appRouter = router({
   createPost: protectedProcedure
     .input(z.object({ update: Update }))
     .mutation(async ({ ctx, input }) => {
+      const attachments = input.update.attachments;
+      const uploadedAttachments = (await Promise.all(attachments.map(async (attachment) => {
+        const filename = `${uuidv4()}.${attachment.type.split("/")[1]}`;
+        return await uploadAttachment(attachment, filename);
+      }))).filter(a => a);
+
+      const payload = {
+        ...input.update,
+        attachments: uploadedAttachments.join(","),
+        userId: ctx.user.id
+      };
+
       // create the post in the db here
-      const [ newPost ] = await db.insert(updates).values({ ...input.update, userId: ctx.user.id }).returning();
+      const [ newPost ] = await db.insert(updates).values(payload).returning();
 
       // emit a create post event
       eventEmitter.emit("createPost", newPost.id.toString(), newPost);
@@ -78,13 +91,22 @@ const appRouter = router({
       const { input, ctx } = opts;
 
       // verify and make sure the post belongs to the user
-      const post = await db.select().from(updates).where(eq(updates.id, input.id));
-      if (post[0].userId !== ctx.user.id) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "You are not allowed to edit this post" });
+      const posts = await db.select().from(updates).where(and(eq(updates.id, input.id), eq(updates.userId, ctx.user.id)));
+      if (posts.length === 0) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Either the post is not found or you do not have the permission to edit this post." });
       }
 
+      const payload = {
+        ...input.body,
+        ...(input.body.attachments ? { 
+          attachments: (await Promise.all(
+            input.body.attachments.map(async a => await uploadAttachment(a, `${uuidv4()}.${a.type.split("/")[1]}`))
+          )).filter(a => a).join(",") 
+        } : {})
+      } as Omit<z.infer<typeof Update>, 'attachments'> & { attachments: string };
+
       // update a post with the specified ID
-      await db.update(updates).set(input.body).where(eq(updates.id, input.id))
+      await db.update(updates).set(payload).where(eq(updates.id, input.id))
     }),
     deletePost: protectedProcedure.input(z.object({ id: z.number()})).mutation(async (opts) => {
       const { input, ctx } = opts;
@@ -105,8 +127,10 @@ const appRouter = router({
     const reaction = await db.select().from(reactions).where(and(eq(reactions.updateId, input.postId), eq(reactions.userId, ctx.user.id)));
     if (reaction.length == 0) {
       // create the reaction
-      await db.insert(reactions).values({ updateId: input.postId, userId: ctx.user.id, reaction: input.reaction });
+      const [ newReaction ] = await db.insert(reactions).values({ updateId: input.postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime() }).returning();
+      eventEmitter.emit("reactToPost", newReaction.id.toString(), newReaction);
     }
+
   }),
   unreactToPost: protectedProcedure.input(z.object({ postId: z.number()})).mutation(async (opts) => {
     const { input, ctx } = opts;
@@ -148,6 +172,28 @@ const appRouter = router({
     // also return new messages from event emitter
     for await (const [ _, postData ] of eePostIterable) {
       yield* maybeYield(postData);
+    }
+  }),
+  streamPostReactions: protectedProcedure.input(z.object({ reaction: z.string(), lastPostId: z.number().nullish()})).subscription(async function* (opts) {
+    const { input } = opts;
+    let lastReactionTime;
+    if (input.lastPostId) {
+      const [ reaction ] = await db.select().from(reactions).where(eq(updates.id, input.lastPostId));
+      lastReactionTime = reaction.reactionTime; 
+    } else {
+      const [ reaction ] = await db.select().from(reactions).orderBy(desc(reactions.reactionTime));
+      lastReactionTime = reaction.reactionTime;
+    }
+
+    function* maybeYield(reaction: z.infer<typeof Reaction>) {
+      if (reaction.reactionTime > lastReactionTime) {
+        tracked(reaction.id.toString(), reaction);
+      }
+    }
+
+    const latestReactions = await db.select().from(reactions).where(gt(reactions.reactionTime, lastReactionTime));
+    for (const reaction of latestReactions) {
+      yield* maybeYield(reaction as any);
     }
   }),
   greet: protectedProcedure.query(async (opts) => {
@@ -202,4 +248,3 @@ app.get("/api/auth/magic-link/verify", async (req, res) => {
 });
 
 app.listen(3000, () => console.log("Server running"));
-

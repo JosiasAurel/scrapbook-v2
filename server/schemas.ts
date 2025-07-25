@@ -14,7 +14,14 @@ export const Update = z.object({
   id: z.number(),
   postTime: z.number(), // timestamp
   text: z.string(),
-  attachments: z.string(), // json stringified array of attachments
+  attachments: z.array(z.instanceof(Blob)), // json stringified array of attachments
   source: z.string(),
   accountId: z.string(),
+})
+
+export const Reaction = z.object({
+  id: z.number(),
+  reactionTime: z.number(), // timestamp
+  reaction: z.string(),
+  userId: z.number()
 })
