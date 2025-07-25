@@ -2,6 +2,8 @@
   "dependencies": {
     "@auth/express": "^0.11.0",
     "@auth/prisma-adapter": "^2.10.0",
+    "@aws-sdk/client-s3": "^3.850.0",
+    "@aws-sdk/lib-storage": "^3.850.0",
     "@libsql/client": "^0.15.10",
     "@trpc/client": "^11.1.0",
     "@trpc/server": "^11.1.0",
