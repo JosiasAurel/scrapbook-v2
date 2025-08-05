@@ -9,6 +9,7 @@ import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
 import { v4 as uuidv4 } from "uuid";
 import { uploadAttachment } from "./s3";
+import { Worker } from "node:worker_threads";
 
 type EventMap<T> = Record<keyof T, any[]>;
 class IterableEventEmitter<T extends EventMap<T>> extends EventEmitter<T> {
@@ -27,6 +28,9 @@ export interface ScrapbookEvents {
 
 // create a global event emitter
 const eventEmitter = new IterableEventEmitter<ScrapbookEvents>();
+
+// set the max number of listeners - adjustable via env
+eventEmitter.setMaxListeners(parseInt(process.env.MAX_PLUGIN_LISTENER!));
 
 const createContext = async ({ req, res}: trpcExpress.CreateExpressContextOptions) => {
   const data = await auth.api.getSession({ headers: req.headers });
@@ -50,6 +54,46 @@ const protectedProcedure = publicProcedure.use(async (opts) => {
     });
 })
 
+type PluginsRegistry = {
+  createPost: string[],
+  createReaction: string[]
+}
+
+const pluginsRegistry: PluginsRegistry = {
+  createPost: ["/pluginsRegistry/scrappy.ts"],
+  createReaction: []
+}
+
+function listenAndNotifyPlugins(eventType: string, data: any) {
+  console.log("notifying plugins for event", eventType);
+  for (const plugin of pluginsRegistry[eventType]) {
+    const pluginPath = __dirname + "/.." + plugin;
+
+    console.log("pluginPath", pluginPath);
+    const worker = new Worker(pluginPath);
+    worker.postMessage({ eventType, data });
+    worker.on("message", (message) => console.log(message));
+    worker.on("error", () => console.log("Error with worker"));
+    worker.on("exit", () => console.log("worker suddenly exited"));
+    // TODO: find a way to kill the service after a certain amount of time 
+    // Something like a setTimeout will probably do the trick
+  }
+}
+
+// TODO: Will BroadcastChannel work here??
+
+// build an event listener that listens to all events and runs notifies plugins of them
+// the keys of the plugins registry correspond to the event names 
+Object.keys(pluginsRegistry).map((eventName) => {
+  console.log("registered an event listener for ", eventName);
+  return eventEmitter.on(eventName as keyof ScrapbookEvents, (_: string, data: any) => {
+    listenAndNotifyPlugins(eventName, data);
+  });
+
+  // console.log("Registering a global event listener for plugins");
+  // for await (const event of on(eventEmitter, eventName)) 
+  //   listenAndNotifyPlugins(eventName, event);
+})
 
 const router = t.router;
 // const protectedProcedure = t.procedure;
@@ -198,6 +242,10 @@ const appRouter = router({
   }),
   greet: protectedProcedure.query(async (opts) => {
     console.log("greeting", opts.ctx.user);
+
+    // emit this event for testing purposes
+    eventEmitter.emit("createPost", "sample", { hello: "world" });
+
     return { success: true, message: "Hello World" };
   })
 });
