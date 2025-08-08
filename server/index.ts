@@ -4,10 +4,10 @@ import { EventEmitter, on } from "node:events";
 import { Update, Reaction } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
-import { db, updates, reactions } from "./drizzle";
+import { db, updates, reactions, deterministicUUID } from "./drizzle";
 import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { uploadAttachment } from "./s3";
 import { Worker } from "node:worker_threads";
 
@@ -33,7 +33,7 @@ const eventEmitter = new IterableEventEmitter<ScrapbookEvents>();
 eventEmitter.setMaxListeners(parseInt(process.env.MAX_PLUGIN_LISTENER!));
 
 const createContext = async ({ req, res}: trpcExpress.CreateExpressContextOptions) => {
-  const data = await auth.api.getSession({ headers: req.headers });
+  const data = await auth.api.getSession({ headers: req.headers as any });
   if (data == null) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: "No token provided" });
   }
@@ -102,18 +102,24 @@ const router = t.router;
 const app = express();
 app.use(express.json());
 
+const obtainObjectId = (id: string | undefined, idBase: string | undefined): string => {
+  if (id) return id;
+  if (!id && idBase) return deterministicUUID(idBase);
+  throw new TRPCError({ code: "FORBIDDEN", message: "Either the post is not found or you do not have the permission to edit this post." });
+}
+
 const appRouter = router({
   createPost: protectedProcedure
-    .input(z.object({ update: Update }))
+    .input(Update.omit({ id: true }))
     .mutation(async ({ ctx, input }) => {
-      const attachments = input.update.attachments;
+      const attachments = input.attachments;
       const uploadedAttachments = (await Promise.all(attachments.map(async (attachment) => {
         const filename = `${uuidv4()}.${attachment.type.split("/")[1]}`;
         return await uploadAttachment(attachment, filename);
       }))).filter(a => a);
 
       const payload = {
-        ...input.update,
+        ...input,
         attachments: uploadedAttachments.join(","),
         userId: ctx.user.id
       };
@@ -130,14 +136,15 @@ const appRouter = router({
     return latestUpdates;
   }),
   editPost: protectedProcedure
-    .input(z.object({ id: z.number(), body: Update }))
+    .input(z.object({ id: z.string().optional(), idBase: z.string().optional(), body: Update.partial() }))
     .mutation(async (opts) => {
       const { input, ctx } = opts;
 
+      const id = obtainObjectId(input.id, input.idBase);
+
       // verify and make sure the post belongs to the user
-      const posts = await db.select().from(updates).where(and(eq(updates.id, input.id), eq(updates.userId, ctx.user.id)));
+      const posts = await db.select().from(updates).where(and(eq(updates.id, id!), eq(updates.userId, ctx.user.id)));
       if (posts.length === 0) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Either the post is not found or you do not have the permission to edit this post." });
       }
 
       const payload = {
@@ -150,39 +157,43 @@ const appRouter = router({
       } as Omit<z.infer<typeof Update>, 'attachments'> & { attachments: string };
 
       // update a post with the specified ID
-      await db.update(updates).set(payload).where(eq(updates.id, input.id))
+      await db.update(updates).set(payload).where(eq(updates.id, input.id!))
     }),
-    deletePost: protectedProcedure.input(z.object({ id: z.number()})).mutation(async (opts) => {
+    deletePost: protectedProcedure.input(z.object({ id: z.string().optional(), idBase: z.string().optional() })).mutation(async (opts) => {
       const { input, ctx } = opts;
 
+      let id = obtainObjectId(input.id, input.idBase);
+
       // verify and make sure the post belongs to the user
-      const post = await db.select().from(updates).where(eq(updates.id, input.id));
+      const post = await db.select().from(updates).where(eq(updates.id, id));
       if (post[0].userId !== ctx.user.id) {
         throw new TRPCError({ code: "FORBIDDEN", message: "You are not allowed to delete this post" });
       }
 
       // delete the post
-      await db.delete(updates).where(eq(updates.id, input.id));
+      await db.delete(updates).where(eq(updates.id, id));
     }),
-  reactToPost: protectedProcedure.input(z.object({ postId: z.number(), reaction: z.string()})).mutation(async (opts) => {
+  reactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional(), reaction: z.string()})).mutation(async (opts) => {
     const { input, ctx } = opts;
+    const postId = obtainObjectId(input.postId, input.idBase);
 
     // check if the user has already reacted to this post with this reaction
-    const reaction = await db.select().from(reactions).where(and(eq(reactions.updateId, input.postId), eq(reactions.userId, ctx.user.id)));
+    const reaction = await db.select().from(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id)));
     if (reaction.length == 0) {
       // create the reaction
-      const [ newReaction ] = await db.insert(reactions).values({ updateId: input.postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime() }).returning();
+      const [ newReaction ] = await db.insert(reactions).values({ updateId: postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime() }).returning();
       eventEmitter.emit("reactToPost", newReaction.id.toString(), newReaction);
     }
 
   }),
-  unreactToPost: protectedProcedure.input(z.object({ postId: z.number()})).mutation(async (opts) => {
+  unreactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional() })).mutation(async (opts) => {
     const { input, ctx } = opts;
 
+    const postId = obtainObjectId(input.postId, input.idBase);
     // delete the reaction
-    await db.delete(reactions).where(and(eq(reactions.updateId, input.postId), eq(reactions.userId, ctx.user.id)));
+    await db.delete(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id)));
   }),
-  onPost: protectedProcedure.input(z.object({ lastPostId: z.number().nullish(), })).subscription(async function* (opts) {
+  onPost: protectedProcedure.input(z.object({ lastPostId: z.string().nullish(), })).subscription(async function* (opts) {
     const { ctx, input } = opts;
     const { lastPostId } = input;
     
@@ -218,7 +229,7 @@ const appRouter = router({
       yield* maybeYield(postData);
     }
   }),
-  streamPostReactions: protectedProcedure.input(z.object({ reaction: z.string(), lastPostId: z.number().nullish()})).subscription(async function* (opts) {
+  streamPostReactions: protectedProcedure.input(z.object({ reaction: z.string(), lastPostId: z.string().nullish()})).subscription(async function* (opts) {
     const { input } = opts;
     let lastReactionTime;
     if (input.lastPostId) {
@@ -271,7 +282,7 @@ app.post("/auth/signup", async (req, res) => {
       body: {
         email: body.email,
       },
-      headers: req.headers
+      headers: req.headers as any
     });
 
     res.json({ success: true, data });
@@ -284,9 +295,9 @@ app.get("/api/auth/magic-link/verify", async (req, res) => {
   try {
     const data = await auth.api.magicLinkVerify({
       query: {
-        token: req.query.token,
+        token: req.query.token as string,
       },
-      headers: req.headers,
+      headers: req.headers as any,
     });
 
     res.json({ success: true, data });
