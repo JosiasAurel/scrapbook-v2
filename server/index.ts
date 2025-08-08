@@ -105,7 +105,7 @@ app.use(express.json());
 const obtainObjectId = (id: string | undefined, idBase: string | undefined): string => {
   if (id) return id;
   if (!id && idBase) return deterministicUUID(idBase);
-  throw new TRPCError({ code: "FORBIDDEN", message: "Either the post is not found or you do not have the permission to edit this post." });
+  throw new TRPCError({ code: "FORBIDDEN", message: "The id or idBase you provided is incorrect" });
 }
 
 const appRouter = router({
