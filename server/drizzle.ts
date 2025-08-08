@@ -1,6 +1,7 @@
 import { config } from "dotenv";
 import { drizzle } from "drizzle-orm/libsql";
 import { int, integer, text, sqliteTable } from "drizzle-orm/sqlite-core";
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 
 // load environment variables
 config();
@@ -13,8 +14,12 @@ config();
 //     timezone: int().notNull(),
 // });
 
+const UUID_NAMESPACE = '964fe082-b01d-44fe-b0a0-e3d6e7a495e9';
+export const deterministicUUID = (input: string) => uuidv5(input, UUID_NAMESPACE);
+
 export const updates = sqliteTable("updates_table", {
-    id: int().primaryKey({ autoIncrement: true }),
+    id: text("id").primaryKey().$defaultFn(() => uuidv4()),
+    // id: int().primaryKey({ autoIncrement: true }),
     postTime: int().notNull(), // timestamp
     text: text().notNull(),
     attachments: text(),
@@ -23,7 +28,8 @@ export const updates = sqliteTable("updates_table", {
 });
 
 export const users = sqliteTable("users", {
-  id: text("id").primaryKey(),
+  id: text("id").primaryKey().$defaultFn(() => uuidv4()),
+  // id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   emailVerified: integer("email_verified", { mode: "boolean" })
@@ -39,7 +45,8 @@ export const users = sqliteTable("users", {
 });
 
 export const sessions = sqliteTable("sessions", {
-  id: text("id").primaryKey(),
+  id: text("id").primaryKey().$defaultFn(() => uuidv4()),
+  // id: text("id").primaryKey(),
   expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
   token: text("token").notNull().unique(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
@@ -52,7 +59,8 @@ export const sessions = sqliteTable("sessions", {
 });
 
 export const accounts = sqliteTable("accounts", {
-  id: text("id").primaryKey(),
+  id: text("id").primaryKey().$defaultFn(() => uuidv4()),
+  // id: text("id").primaryKey(),
   accountId: text("account_id").notNull(),
   providerId: text("provider_id").notNull(),
   userId: text("user_id")
@@ -74,7 +82,8 @@ export const accounts = sqliteTable("accounts", {
 });
 
 export const verifications = sqliteTable("verifications", {
-  id: text("id").primaryKey(),
+  id: text("id").primaryKey().$defaultFn(() => uuidv4()),
+  // id: text("id").primaryKey(),
   identifier: text("identifier").notNull(),
   value: text("value").notNull(),
   expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
@@ -87,8 +96,10 @@ export const verifications = sqliteTable("verifications", {
 });
 
 export const reactions = sqliteTable("reactions", {
-  id: int().primaryKey({ autoIncrement: true }),
-  updateId: int().notNull().references(() => updates.id, { onDelete: "cascade" }),
+  id: text("id").primaryKey().$defaultFn(() => uuidv4()),
+  // id: int().primaryKey({ autoIncrement: true }),
+  // updateId: int().notNull().references(() => updates.id, { onDelete: "cascade" }),
+  updateId: text().notNull().references(() => updates.id, { onDelete: "cascade" }),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   reaction: text("reaction").notNull(),
   reactionTime: int().notNull()
