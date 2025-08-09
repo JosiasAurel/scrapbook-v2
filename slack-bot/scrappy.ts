@@ -32,6 +32,7 @@ scrappy.event("message", async (thing) => {
   const { context, message, say } = thing;
   console.log(message);
 
+  if ((message as any).thread_ts) return;
   if (!message.subtype) {
     // create the post
     console.log("creating post");
@@ -46,6 +47,12 @@ scrappy.event("message", async (thing) => {
           text: message.text!,
           attachments: [],
         },
+      });
+
+      // motivating you
+      await say({
+        text: "Well done there! Keep cooking",
+        thread_ts: message.ts
       });
 
       console.log(result);
@@ -63,6 +70,13 @@ scrappy.event("message", async (thing) => {
       idBase: makeIdBase(message.channel, message.message.ts),
       body: { text: (message.message as any).text },
     });
+
+    // updated the message
+    await say({
+      text: "Updated your message",
+      thread_ts: message.message.ts
+    });
+
     return;
   }
 
