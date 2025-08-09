@@ -110,18 +110,19 @@ const obtainObjectId = (id: string | undefined, idBase: string | undefined): str
 
 const appRouter = router({
   createPost: protectedProcedure
-    .input(Update.omit({ id: true }))
+    .input(z.object({ idBase: z.string().optional(), data: Update.omit({ id: true }) }))
     .mutation(async ({ ctx, input }) => {
-      const attachments = input.attachments;
+      const attachments = input.data.attachments;
       const uploadedAttachments = (await Promise.all(attachments.map(async (attachment) => {
         const filename = `${uuidv4()}.${attachment.type.split("/")[1]}`;
         return await uploadAttachment(attachment, filename);
       }))).filter(a => a);
 
       const payload = {
-        ...input,
+        ...input.data,
         attachments: uploadedAttachments.join(","),
-        userId: ctx.user.id
+        userId: ctx.user.id,
+        ...(input.idBase ? { id: deterministicUUID(input.idBase) } : {} )
       };
 
       // create the post in the db here
@@ -129,6 +130,7 @@ const appRouter = router({
 
       // emit a create post event
       eventEmitter.emit("createPost", newPost.id.toString(), newPost);
+      return { success: true, data: newPost };
     }),
   getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
     const latestUpdates = await db.select().from(updates).limit(50).orderBy(desc(updates.postTime))
@@ -145,8 +147,10 @@ const appRouter = router({
       // verify and make sure the post belongs to the user
       const posts = await db.select().from(updates).where(and(eq(updates.id, id!), eq(updates.userId, ctx.user.id)));
       if (posts.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Could not find a post with that id" });
       }
 
+      // TODO: Should delete all attachments that changed
       const payload = {
         ...input.body,
         ...(input.body.attachments ? { 
@@ -157,7 +161,7 @@ const appRouter = router({
       } as Omit<z.infer<typeof Update>, 'attachments'> & { attachments: string };
 
       // update a post with the specified ID
-      await db.update(updates).set(payload).where(eq(updates.id, input.id!))
+      await db.update(updates).set(payload).where(eq(updates.id, id))
     }),
     deletePost: protectedProcedure.input(z.object({ id: z.string().optional(), idBase: z.string().optional() })).mutation(async (opts) => {
       const { input, ctx } = opts;
@@ -166,6 +170,7 @@ const appRouter = router({
 
       // verify and make sure the post belongs to the user
       const post = await db.select().from(updates).where(eq(updates.id, id));
+      if (post.length === 0) return { success: false, data: "This post does not exist" }
       if (post[0].userId !== ctx.user.id) {
         throw new TRPCError({ code: "FORBIDDEN", message: "You are not allowed to delete this post" });
       }

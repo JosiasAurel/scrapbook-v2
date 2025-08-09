@@ -17,7 +17,7 @@ config();
 const UUID_NAMESPACE = '964fe082-b01d-44fe-b0a0-e3d6e7a495e9';
 export const deterministicUUID = (input: string) => uuidv5(input, UUID_NAMESPACE);
 
-export const updates = sqliteTable("updates_table", {
+export const updates = sqliteTable("updates", {
     id: text("id").primaryKey().$defaultFn(() => uuidv4()),
     // id: int().primaryKey({ autoIncrement: true }),
     postTime: int().notNull(), // timestamp
