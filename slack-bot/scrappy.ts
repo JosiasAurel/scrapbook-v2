@@ -67,8 +67,8 @@ scrappy.event("message", async (thing) => {
 	let blobs = await Promise.all(message.files?.map(async (file) => {
 		const data =  await getPublicFileUrl(file.mimetype, file.url_private!, message.channel, message.user)!; 
                 // const arrayBuffer = await data?.blob.arrayBuffer();
-        const b64Data = await arrayBufferToString.decode(data?.buffer);
-    return { type: data?.type, data: b64Data };
+        // const b64Data = await arrayBufferToString.decode(data?.buffer);
+    return { type: data?.type, blob: data.blob };
 	})!);
   blobs = blobs ? blobs : [];
 
@@ -83,9 +83,21 @@ scrappy.event("message", async (thing) => {
           // accountId: message.user, // this should be the actual user ID of the person
           accountId: "03UNU8wTeqbdVKCXXck9EvlMddypcNqf",
           text: message.text!,
-          attachments: blobs,
+          attachments: blobs.map(b => b.type),
         },
       });
+            // upload the attachments
+        result.data.attachments.map(async (attachmentPresigned, index) => {
+                const object = blobs[index];
+           // const blob = new Blob([ object.data ], { type: object.type });
+            const response = await fetch(attachmentPresigned, {
+                method: "PUT",
+                body: object.blob 
+            });
+            if (response.ok) {
+                    console.log("[slack-bolt] Uploaded to", attachmentPresigned);
+                }
+        });
 
       // motivating you
       // await say({
@@ -191,8 +203,8 @@ export const getPublicFileUrl = async (filetype: string, urlPrivate: string, cha
 
   let blob = await file.blob();
 
-  let mediaStream = blob.stream();
-    let outBuffer = await blob.arrayBuffer();
+  // let mediaStream = blob.stream();
+    // let outBuffer = await blob.arrayBuffer();
   if (blob.type === "image/heic") {
     const blobArrayBuffer = Buffer.from(await blob.arrayBuffer());
     // convert the image buffer into a jpeg image
@@ -203,16 +215,18 @@ export const getPublicFileUrl = async (filetype: string, urlPrivate: string, cha
     });
 
      // create a readable stream for upload
-    mediaStream = stream.Readable.from(outBuffer) as any;
+    // mediaStream = stream.Readable.from(outBuffer) as any;
 
     // fileName = `./${uuidv4()}.jpeg`;
-        filetype = "image/jpeg";
+    filetype = "image/jpeg";
+    blob = new Blob([ outBuffer ], { type: filetype });
     // return { type: "image/jpeg", buffer: outBuffer };
   } 
   
     if (blob.size == 19) throw new Error("Media file not found");
 
-  return { type: filetype, buffer: outBuffer } as const;
+  // return { type: filetype, buffer: outBuffer } as const;
+  return { type: filetype, blob } as const;
     /*
   if (blob.size === 19) {
     const publicFile = scrappy.client.files.sharedPublicURL({
