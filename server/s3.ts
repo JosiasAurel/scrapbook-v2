@@ -1,5 +1,6 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "dotenv";
 import { v4 as uuidv4 } from "uuid";
 
@@ -32,6 +33,18 @@ export async function uploadAttachment(arrayBuffer: ArrayBuffer, filetype: strin
         console.log("Failed to upload blob", typeof stream, Object.keys(stream).length, stream, err);
         return undefined;
     }
+}
+
+export async function makeSignedUrl(filename: string, filetype: string) {
+    const command = new PutObjectCommand({
+        Bucket: "scrapbook-into-the-redwoods",
+        Key: `${uuidv4()}-${filename}`,
+        ContentType: filetype
+    });
+
+    // signed url expires in 15 minutes
+    const signedUrl = await getSignedUrl(s3, command, { expires: 15 * 60 });
+    return signedUrl;
 }
 
 export default s3;
