@@ -14,7 +14,8 @@ export const Update = z.object({
   id: z.string(),
   postTime: z.number(), // timestamp
   text: z.string(),
-  attachments: z.array(z.any()), // json stringified array of attachments
+  // attachments: z.array(z.any()), // json stringified array of attachments
+  attachments: z.array(z.string()), // each string represents the type 
   source: z.string(),
   accountId: z.string(),
 })

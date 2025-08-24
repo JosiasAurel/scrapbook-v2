@@ -8,7 +8,7 @@ import { db, updates, reactions, deterministicUUID } from "./drizzle";
 import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
-import { uploadAttachment } from "./s3";
+import { uploadAttachment, makeSignedUrl } from "./s3";
 import { Worker } from "node:worker_threads";
 import Mux from "@mux/mux-node";
 
@@ -106,7 +106,7 @@ const router = t.router;
 
 // express things
 const app = express();
-app.use(express.json({ limit: '100mb' })); // TODO: @Josias: I'm well aware how awful this is and the idea of transmitting large videos in a payload like this. Will fix.
+app.use(express.json());
 
 const obtainObjectId = (id: string | undefined, idBase: string | undefined): string => {
   if (id) return id;
@@ -118,17 +118,12 @@ const appRouter = router({
   createPost: protectedProcedure
     .input(z.object({ idBase: z.string().optional(), data: Update.omit({ id: true }) }))
     .mutation(async ({ ctx, input }) => {
-      const attachments = input.data.attachments;
-
-
-      const uploadedAttachments = (await Promise.all(attachments.map(async (attachment) => {
-        const bufferData = arrayBufferToString.encode(attachment.data);
-        return await uploadAttachment(bufferData, attachment.type);
-      }))).filter(a => a);
+    
+    const presignedUrls = await Promise.all(input.data.attachments.map(async (filetype) => await makeSignedUrl(`${uuidv4()}.${filetype.split("/")[1]}`, filetype)));
 
       const payload = {
         ...input.data,
-        attachments: uploadedAttachments.join(","),
+        attachments: presignedUrls.map(u => u.split("?")[0]).join(","),
         userId: ctx.user.id,
         ...(input.idBase ? { id: deterministicUUID(input.idBase) } : {} )
       };
@@ -138,7 +133,7 @@ const appRouter = router({
 
       // emit a create post event
       eventEmitter.emit("createPost", newPost.id.toString(), newPost);
-      return { success: true, data: newPost };
+      return { success: true, data: { ...newPost, attachments: presignedUrls } };
     }),
   getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
     const latestUpdates = await db.select().from(updates).limit(50).orderBy(desc(updates.postTime))
