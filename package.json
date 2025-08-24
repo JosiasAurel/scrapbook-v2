@@ -5,6 +5,7 @@
     "@aws-sdk/client-s3": "^3.850.0",
     "@aws-sdk/lib-storage": "^3.850.0",
     "@libsql/client": "^0.15.10",
+    "@mux/mux-node": "^12.4.1",
     "@slack/bolt": "^4.4.0",
     "@trpc/client": "^11.1.0",
     "@trpc/server": "^11.1.0",
@@ -12,8 +13,10 @@
     "dotenv": "^17.2.0",
     "drizzle-orm": "^0.44.3",
     "express": "^5.1.0",
+    "heic-convert": "^2.1.0",
+    "nanoid": "^5.1.5",
     "resend": "^4.7.0",
-    "zod": "^4.0.5"
+    "zod": "^4.1.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.10",
