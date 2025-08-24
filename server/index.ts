@@ -106,7 +106,7 @@ const router = t.router;
 
 // express things
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '100mb' })); // TODO: @Josias: I'm well aware how awful this is and the idea of transmitting large videos in a payload like this. Will fix.
 
 const obtainObjectId = (id: string | undefined, idBase: string | undefined): string => {
   if (id) return id;
