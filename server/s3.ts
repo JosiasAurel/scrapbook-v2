@@ -14,17 +14,24 @@ const s3 = new S3Client({
   }
 });
 
-export async function uploadAttachment(blob: Blob, filename: string): Promise<string | undefined> {
+// export async function uploadAttachment(stream: ReadableStream, filetype: string): Promise<string | undefined> {
+export async function uploadAttachment(arrayBuffer: ArrayBuffer, filetype: string): Promise<string | undefined> {
+    const bodyData = Buffer.from(arrayBuffer);
     const upload = new Upload({
         client: s3, 
         params: {
             Bucket: "scrapbook-into-the-redwoods",
-            Key: `${uuidv4()}-${filename}`,
-            Body: blob
+            Key: `${uuidv4()}.${filetype.split("/")[1]}`,
+            Body: bodyData
         }
     });
-    const uploadedImage = await upload.done();
-    return uploadedImage.Location;
+    try {
+        const uploadedImage = await upload.done();
+        return uploadedImage.Location
+    } catch (err) {
+        console.log("Failed to upload blob", typeof stream, Object.keys(stream).length, stream, err);
+        return undefined;
+    }
 }
 
 export default s3;
