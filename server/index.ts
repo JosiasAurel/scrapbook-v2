@@ -1,7 +1,7 @@
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { z } from "zod";
 import { EventEmitter, on } from "node:events";
-import { Update, Reaction } from "./schemas";
+import { Update, Reaction, arrayBufferToString } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import { db, updates, reactions, deterministicUUID } from "./drizzle";
@@ -10,6 +10,12 @@ import { auth } from "./auth";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 import { uploadAttachment } from "./s3";
 import { Worker } from "node:worker_threads";
+import Mux from "@mux/mux-node";
+
+const mux = new Mux({
+	tokenId: process.env.MUX_TOKEN_ID,
+	tokenSecret: process.env.MUX_TOKEN_SECRET,
+});
 
 type EventMap<T> = Record<keyof T, any[]>;
 class IterableEventEmitter<T extends EventMap<T>> extends EventEmitter<T> {
@@ -32,7 +38,7 @@ const eventEmitter = new IterableEventEmitter<ScrapbookEvents>();
 // set the max number of listeners - adjustable via env
 eventEmitter.setMaxListeners(parseInt(process.env.MAX_PLUGIN_LISTENER!));
 
-const createContext = async ({ req, res}: trpcExpress.CreateExpressContextOptions) => {
+const createContext = async ({ req, res }: trpcExpress.CreateExpressContextOptions) => {
   const data = await auth.api.getSession({ headers: req.headers as any });
   if (data == null) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: "No token provided" });
@@ -113,9 +119,11 @@ const appRouter = router({
     .input(z.object({ idBase: z.string().optional(), data: Update.omit({ id: true }) }))
     .mutation(async ({ ctx, input }) => {
       const attachments = input.data.attachments;
+
+
       const uploadedAttachments = (await Promise.all(attachments.map(async (attachment) => {
-        const filename = `${uuidv4()}.${attachment.type.split("/")[1]}`;
-        return await uploadAttachment(attachment, filename);
+        const bufferData = arrayBufferToString.encode(attachment.data);
+        return await uploadAttachment(bufferData, attachment.type);
       }))).filter(a => a);
 
       const payload = {
