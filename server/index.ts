@@ -202,29 +202,25 @@ const appRouter = router({
       // delete the post
       await db.delete(updates).where(eq(updates.id, id));
     }),
-  reactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional(), reaction: z.string()})).mutation(async (opts) => {
+  reactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional(), reactionType: z.union([z.literal("URL"), z.literal("UNICODE")]), reaction: z.union([z.url(), z.string()])})).mutation(async (opts) => {
     const { input, ctx } = opts;
     const postId = obtainObjectId(input.postId, input.idBase);
 
     // check if the user has already reacted to this post with this reaction
     const reaction = await db.select().from(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id)));
     if (reaction.length == 0) {
-      const matchingReactions = await db.select().from(reactionSource).where(eq(reactionSource.name, input.reaction));
-      if (matchingReactions.length === 0) return;
-
-      const thisReaction = matchingReactions[0];
       // create the reaction
-      const [ newReaction ] = await db.insert(reactions).values({ updateId: postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime(), reactionId: thisReaction.id }).returning();
+      const [ newReaction ] = await db.insert(reactions).values({ updateId: postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime(), reactionType: input.reactionType }).returning();
       eventEmitter.emit("reactToPost", newReaction.id.toString(), newReaction);
     }
 
   }),
-  unreactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional() })).mutation(async (opts) => {
+  unreactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional(), reactionId: z.string() })).mutation(async (opts) => {
     const { input, ctx } = opts;
 
     const postId = obtainObjectId(input.postId, input.idBase);
     // delete the reaction
-    await db.delete(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id)));
+    await db.delete(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id), eq(reactions.id, input.reactionId)));
   }),
   onPost: protectedProcedure.input(z.object({ lastPostId: z.string().nullish(), })).subscription(async function* (opts) {
     const { ctx, input } = opts;

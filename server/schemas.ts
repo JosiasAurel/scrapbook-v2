@@ -23,7 +23,8 @@ export const Update = z.object({
 export const Reaction = z.object({
   id: z.string(),
   reactionTime: z.number(), // timestamp
-  reaction: z.string(),
+  reactionType: z.union([z.literal("URL"), z.literal("UNICODE")]),
+  reaction: z.union([z.url(), z.string()]), // reaction is either url to image/gif or emoji unicode representation
   userId: z.string()
 })
 
