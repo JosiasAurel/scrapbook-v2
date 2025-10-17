@@ -4,7 +4,7 @@ import { EventEmitter, on } from "node:events";
 import { Update, Reaction, arrayBufferToString } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
-import { db, updates, reactions, deterministicUUID, reactionSource } from "./drizzle";
+import { db, updates, reactions, deterministicUUID } from "./drizzle";
 import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
