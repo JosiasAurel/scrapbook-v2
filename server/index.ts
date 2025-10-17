@@ -4,7 +4,7 @@ import { EventEmitter, on } from "node:events";
 import { Update, Reaction, arrayBufferToString } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
-import { db, updates, reactions, deterministicUUID } from "./drizzle";
+import { db, updates, reactions, deterministicUUID, reactionSource } from "./drizzle";
 import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
@@ -81,7 +81,7 @@ function listenAndNotifyPlugins(eventType: string, data: any) {
     worker.on("message", (message) => console.log(message));
     worker.on("error", () => console.log("Error with worker"));
     worker.on("exit", () => console.log("worker suddenly exited"));
-    // TODO: find a way to kill the service after a certain amount of time 
+    // TODO: find a way to kill the service after a certain amount of time
     // Something like a setTimeout will probably do the trick
   }
 }
@@ -89,7 +89,7 @@ function listenAndNotifyPlugins(eventType: string, data: any) {
 // TODO: Will BroadcastChannel work here??
 
 // build an event listener that listens to all events and runs notifies plugins of them
-// the keys of the plugins registry correspond to the event names 
+// the keys of the plugins registry correspond to the event names
 Object.keys(pluginsRegistry).map((eventName) => {
   console.log("registered an event listener for ", eventName);
   return eventEmitter.on(eventName as keyof ScrapbookEvents, (_: string, data: any) => {
@@ -97,7 +97,7 @@ Object.keys(pluginsRegistry).map((eventName) => {
   });
 
   // console.log("Registering a global event listener for plugins");
-  // for await (const event of on(eventEmitter, eventName)) 
+  // for await (const event of on(eventEmitter, eventName))
   //   listenAndNotifyPlugins(eventName, event);
 })
 
@@ -118,8 +118,25 @@ const appRouter = router({
   createPost: protectedProcedure
     .input(z.object({ idBase: z.string().optional(), data: Update.omit({ id: true }) }))
     .mutation(async ({ ctx, input }) => {
-    
-    const presignedUrls = await Promise.all(input.data.attachments.map(async (filetype) => await makeSignedUrl(`${uuidv4()}.${filetype.split("/")[1]}`, filetype)));
+
+      console.log("Received request to create post");
+    const presignedUrls = await Promise.all(input.data.attachments.map(async (file) => {
+      if (file.type.endsWith("mp4") || file.type.endsWith("mov") || file.type.endsWith("webm")) {
+        console.log("video file url", file);
+        const videoAsset = await mux.video.assets.create({
+          inputs: [ { url: file.url! } ],
+          playback_policies: ["public"]
+        });
+
+        // This is a Mux video stream
+        const playbackUrl = `https://stream.mux.com/${videoAsset.playback_ids![0].id}.m3u8`;
+        // console.log("video playback url", playbackUrl);
+
+        return playbackUrl;
+      }
+      return await makeSignedUrl(`${uuidv4()}.${file.type.split("/")[1]}`, file.type)
+    }
+    ));
 
       const payload = {
         ...input.data,
@@ -128,6 +145,8 @@ const appRouter = router({
         ...(input.idBase ? { id: deterministicUUID(input.idBase) } : {} )
       };
 
+      console.log("creating post with payload", payload);
+
       // create the post in the db here
       const [ newPost ] = await db.insert(updates).values(payload).returning();
 
@@ -135,8 +154,10 @@ const appRouter = router({
       eventEmitter.emit("createPost", newPost.id.toString(), newPost);
       return { success: true, data: { ...newPost, attachments: presignedUrls } };
     }),
-  getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
+  getFeed: publicProcedure.input(z.number()).query(async (opts) => {
     const latestUpdates = await db.select().from(updates).limit(50).orderBy(desc(updates.postTime))
+      .leftJoin(reactions, eq(updates.id, reactions.updateId))
+      .leftJoin(reactionSource, eq(reactions.reaction, reactionSource.name));
 
     return latestUpdates;
   }),
@@ -156,10 +177,10 @@ const appRouter = router({
       // TODO: Should delete all attachments that changed
       const payload = {
         ...input.body,
-        ...(input.body.attachments ? { 
+        ...(input.body.attachments ? {
           attachments: (await Promise.all(
             input.body.attachments.map(async a => await uploadAttachment(a, `${uuidv4()}.${a.type.split("/")[1]}`))
-          )).filter(a => a).join(",") 
+          )).filter(a => a).join(",")
         } : {})
       } as Omit<z.infer<typeof Update>, 'attachments'> & { attachments: string };
 
@@ -188,8 +209,12 @@ const appRouter = router({
     // check if the user has already reacted to this post with this reaction
     const reaction = await db.select().from(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id)));
     if (reaction.length == 0) {
+      const matchingReactions = await db.select().from(reactionSource).where(eq(reactionSource.name, input.reaction));
+      if (matchingReactions.length === 0) return;
+
+      const thisReaction = matchingReactions[0];
       // create the reaction
-      const [ newReaction ] = await db.insert(reactions).values({ updateId: postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime() }).returning();
+      const [ newReaction ] = await db.insert(reactions).values({ updateId: postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime(), reactionId: thisReaction.id }).returning();
       eventEmitter.emit("reactToPost", newReaction.id.toString(), newReaction);
     }
 
@@ -204,7 +229,7 @@ const appRouter = router({
   onPost: protectedProcedure.input(z.object({ lastPostId: z.string().nullish(), })).subscription(async function* (opts) {
     const { ctx, input } = opts;
     const { lastPostId } = input;
-    
+
     const eePostIterable = eventEmitter.toIterable("createPost", {
       signal: opts.signal
     });
@@ -214,7 +239,7 @@ const appRouter = router({
     if (lastPostId) {
       // get the post time of the post with the last id
       const [ postWithId ] = await db.select().from(updates).where(eq(updates.id, lastPostId));
-      lastPostCreatedTime = postWithId.postTime; 
+      lastPostCreatedTime = postWithId.postTime;
     } else {
       const [ lastPost ] = await db.select().from(updates).orderBy(desc(updates.postTime)).limit(1);
       lastPostCreatedTime = lastPost.postTime;
@@ -242,7 +267,7 @@ const appRouter = router({
     let lastReactionTime;
     if (input.lastPostId) {
       const [ reaction ] = await db.select().from(reactions).where(eq(updates.id, input.lastPostId));
-      lastReactionTime = reaction.reactionTime; 
+      lastReactionTime = reaction.reactionTime;
     } else {
       const [ reaction ] = await db.select().from(reactions).orderBy(desc(reactions.reactionTime));
       lastReactionTime = reaction.reactionTime;
