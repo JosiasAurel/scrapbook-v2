@@ -256,7 +256,7 @@ export const getPublicFileUrl = async (filetype: string, urlPrivate: string, cha
     const blobArrayBuffer = Buffer.from(await blob.arrayBuffer());
     // convert the image buffer into a jpeg image
     // const outBuffer = await convert({
-    outBuffer = await convert({
+    const outBuffer = await convert({
       buffer: blobArrayBuffer,
       format: "JPEG" 
     });
