@@ -31,18 +31,21 @@ const trpcClient = createTRPCClient<AppRouter>({
       url: "http://localhost:3000/trpc",
       async headers() {
         const headers = new Headers();
-        // headers.set("Authorization", "Bearer IbXWu0oafAcAdyF9LgWrEJON69t312ED"); // TODO: Replace token with variable - This is an app token
-        headers.set("Authorization", "Bearer GWI1JxaeWqx6rBImVAUupgXzkVKGzjWN"); // TODO: Replace token with variable - This is an app token
+        headers.set("Authorization", "Bearer BjdAfmINXk0eamQhFQpP9wq4HaH2ZNNA"); // TODO: Replace token with variable - This is an app token
         return headers;
       },
     }),
   ],
 });
 
+// slack tokens
+const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
+
 // Initialize slack bot
 const scrappy = new App({
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  token: process.env.SLACK_BOT_TOKEN,
+  signingSecret: SLACK_SIGNING_SECRET,
+  token: SLACK_BOT_TOKEN,
 });
 
 // Initialize Mux client
@@ -51,6 +54,7 @@ const mux = new Mux({
 	tokenSecret: process.env.MUX_TOKEN_SECRET,
 });
 
+const SCRAPBOOK_V2_CHANNEL = "C096Y7U3L4T";
 const makeIdBase = (channel: string, ts: string) => `${channel}-${ts}`;
 
 scrappy.event("message", async (thing) => {
@@ -64,16 +68,46 @@ scrappy.event("message", async (thing) => {
     // create the post
     // console.log("creating post", message);
     try {
-	let blobs = await Promise.all(message.files?.map(async (file) => {
-		const data =  await getPublicFileUrl(file.mimetype, file.url_private!, message.channel, message.user)!; 
-                // const arrayBuffer = await data?.blob.arrayBuffer();
-        // const b64Data = await arrayBufferToString.decode(data?.buffer);
-    return { type: data?.type, blob: data.blob };
-	})!);
-  blobs = blobs ? blobs : [];
+      if (message.files?.length === 0) {
+        // should check if it has a link with an OG image though. We will use the OG image for
+        // media attachment if it has one
+        await say({
+          text: "We will not save this post in scrapbook. Post most contain an image or a video",
+          thread_ts: message.ts,
+        });
+        return;
+      }
 
-    if (blobs.length > 0) {
-    } else { console.log("Not enough attachments"); }
+      // TODO: In the future it should check for og image and other metadata for rendering.
+      if (!message.files) {
+        return await say({
+          text: "Please retry with an image or video",
+          thread_ts: message.ts,
+        }) 
+      }
+
+      let blobs = await Promise.all(
+        message.files?.map(async (file) => {
+          const data = await getPublicFileUrl(
+            file.mimetype,
+            file.url_private!,
+            message.channel,
+            message.user
+          )!;
+          console.log("data i got", data);
+          return data;
+        })!
+      );
+      blobs = blobs ? blobs : [];
+
+      if (blobs.length > 0) {
+      } else {
+        console.log("Not enough attachments");
+      }
+
+      console.log("sending in for blobs", 
+        blobs.map(blob => ({ type: blob.type, url: blob.url }))
+      );
 
       const result = await trpcClient.createPost.mutate({
         idBase: makeIdBase(message.channel, message.ts),
@@ -83,27 +117,33 @@ scrappy.event("message", async (thing) => {
           // accountId: message.user, // this should be the actual user ID of the person
           accountId: "03UNU8wTeqbdVKCXXck9EvlMddypcNqf",
           text: message.text!,
-          attachments: blobs.map(b => b.type),
+          attachments: blobs.map(blob => ({ type: blob.type, url: blob.url })),
         },
       });
-            // upload the attachments
-        result.data.attachments.map(async (attachmentPresigned, index) => {
-                const object = blobs[index];
-           // const blob = new Blob([ object.data ], { type: object.type });
-            const response = await fetch(attachmentPresigned, {
-                method: "PUT",
-                body: object.blob 
-            });
-            if (response.ok) {
-                    console.log("[slack-bolt] Uploaded to", attachmentPresigned);
-                }
+
+      console.log("we got results from the server", result);
+
+      // upload the attachments
+      result.data.attachments.forEach(async (attachmentPresigned, index) => {
+        const object = blobs[index];
+        // const blob = new Blob([ object.data ], { type: object.type });
+        // skip videos because they should already be uploaded
+        if (object?.type.includes("mp4")) return;
+
+        const response = await fetch(attachmentPresigned, {
+          method: "PUT",
+          body: object.blob,
         });
+        if (response.ok) {
+          console.log("[slack-bolt] Uploaded to", attachmentPresigned);
+        }
+      });
 
       // motivating you
-      // await say({
-      //   text: "Well done there! Keep cooking",
-      //   thread_ts: message.ts
-      // });
+      await say({
+        text: "Well done there! Keep cooking",
+        thread_ts: message.ts,
+      });
 
     } catch (err) {
       console.log("couldn't create post");
@@ -121,10 +161,10 @@ scrappy.event("message", async (thing) => {
     });
 
     // updated the message
-    // await say({
-    //   text: "Updated your message",
-    //   thread_ts: message.message.ts
-    // });
+    await say({
+      text: "Updated your message",
+      thread_ts: message.message.ts
+    });
 
     return;
   }
@@ -139,6 +179,13 @@ scrappy.event("message", async (thing) => {
     return;
   }
   console.log("nothing");
+});
+
+scrappy.event("reaction_added", async ({ event }) => {
+  const { reaction, user, item_user, item } = event;
+  if (item.channel !== SCRAPBOOK_V2_CHANNEL) return;
+
+  console.log("reacted with ", reaction);
 });
 
 async function runApp() {
@@ -203,7 +250,7 @@ export const getPublicFileUrl = async (filetype: string, urlPrivate: string, cha
 
   let blob = await file.blob();
 
-  // let mediaStream = blob.stream();
+//   let mediaStream = blob.stream();
     // let outBuffer = await blob.arrayBuffer();
   if (blob.type === "image/heic") {
     const blobArrayBuffer = Buffer.from(await blob.arrayBuffer());
@@ -223,60 +270,29 @@ export const getPublicFileUrl = async (filetype: string, urlPrivate: string, cha
     // return { type: "image/jpeg", buffer: outBuffer };
   } 
   
-    if (blob.size == 19) throw new Error("Media file not found");
+  if (blob.size == 19) throw new Error("Media file not found");
+
+  if (isVideo) {
+    console.log("blob", blob);
+
+    const form = new FormData();
+    // const mediaStream = blob.stream();
+
+    form.append("file", blob, fileName);
+
+    const uploadedUrl = await fetch("https://bucky.hackclub.com", {
+      method: "POST",
+      body: form
+    }).then(r => r.text());
+
+    // console.log("uploaded video to bucky", uploadedUrl);
+
+    return { type: filetype, url: uploadedUrl, blob: null };
+  }
 
   // return { type: filetype, buffer: outBuffer } as const;
-  return { type: filetype, blob } as const;
-    /*
-  if (blob.size === 19) {
-    const publicFile = scrappy.client.files.sharedPublicURL({
-      token: process.env.SLACK_USER_TOKEN,
-      file: fileId,
-    });
-    const pubSecret = publicFile.file.permalink_public.split("-").pop();
-    const directUrl = `https://files.slack.com/files-pri/T0266FRGM-${fileId}/${fileName}?pub_secret=${pubSecret}`;
-  //   if (isVideo) {
-
-  //     await timeout(30000);
-	// // TODO: The video upload should be done on the server-side
-	// //
-  //     const asset = await mux.video.assets.create({
-  //       input: directUrl,
-  //       playback_policy: "public",
-  //     });
-  //     return {
-  //       url: "https://i.imgur.com/UkXMexG.mp4",
-  //       muxId: asset.id,
-  //       muxPlaybackId: asset.playback_ids[0].id,
-  //     };
-  //   } else {
-  //     await postEphemeral(channel, t("messages.errors.imagefail"));
-  //     return { url: directUrl };
-  //   }
-  }
-*/
-  // if (isVideo) {
-  //   let form = new FormData();
-  //   form.append("file", mediaStream, {
-  //     filename: fileName,
-  //     knownLength: blob.size,
-  //   });
-  //   const uploadedUrl = await fetch("https://bucky.hackclub.com", {
-  //     method: "POST",
-  //     body: form,
-  //   }).then((r) => r.text());
-	// // TODO: Asset upload should be done on the server-side 
-	// //
-  //   const asset = await mux.video.assets.create({
-  //     input: uploadedUrl,
-  //     playback_policy: "public",
-  //   });
-  //   return {
-  //     url: uploadedUrl,
-  //     muxId: asset.id,
-  //     muxPlaybackId: asset.playback_ids[0].id,
-  //   };
-  // }	
+  // return { type: filetype, blob } as const;
+  return { type: filetype, url: null, blob };
 };
 
 runApp();
