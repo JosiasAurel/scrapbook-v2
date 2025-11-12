@@ -1,15 +1,21 @@
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { z } from "zod";
 import { EventEmitter, on } from "node:events";
-import { Update, Reaction } from "./schemas";
+import { Update, Reaction, arrayBufferToString } from "./schemas";
 import express from "express";
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import { db, updates, reactions, deterministicUUID } from "./drizzle";
 import { eq, and, desc, gt } from "drizzle-orm";
 import { auth } from "./auth";
 import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
-import { uploadAttachment } from "./s3";
+import { uploadAttachment, makeSignedUrl } from "./s3";
 import { Worker } from "node:worker_threads";
+import Mux from "@mux/mux-node";
+
+const mux = new Mux({
+	tokenId: process.env.MUX_TOKEN_ID,
+	tokenSecret: process.env.MUX_TOKEN_SECRET,
+});
 
 type EventMap<T> = Record<keyof T, any[]>;
 class IterableEventEmitter<T extends EventMap<T>> extends EventEmitter<T> {
@@ -32,7 +38,7 @@ const eventEmitter = new IterableEventEmitter<ScrapbookEvents>();
 // set the max number of listeners - adjustable via env
 eventEmitter.setMaxListeners(parseInt(process.env.MAX_PLUGIN_LISTENER!));
 
-const createContext = async ({ req, res}: trpcExpress.CreateExpressContextOptions) => {
+const createContext = async ({ req, res }: trpcExpress.CreateExpressContextOptions) => {
   const data = await auth.api.getSession({ headers: req.headers as any });
   if (data == null) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: "No token provided" });
@@ -75,7 +81,7 @@ function listenAndNotifyPlugins(eventType: string, data: any) {
     worker.on("message", (message) => console.log(message));
     worker.on("error", () => console.log("Error with worker"));
     worker.on("exit", () => console.log("worker suddenly exited"));
-    // TODO: find a way to kill the service after a certain amount of time 
+    // TODO: find a way to kill the service after a certain amount of time
     // Something like a setTimeout will probably do the trick
   }
 }
@@ -83,7 +89,7 @@ function listenAndNotifyPlugins(eventType: string, data: any) {
 // TODO: Will BroadcastChannel work here??
 
 // build an event listener that listens to all events and runs notifies plugins of them
-// the keys of the plugins registry correspond to the event names 
+// the keys of the plugins registry correspond to the event names
 Object.keys(pluginsRegistry).map((eventName) => {
   console.log("registered an event listener for ", eventName);
   return eventEmitter.on(eventName as keyof ScrapbookEvents, (_: string, data: any) => {
@@ -91,7 +97,7 @@ Object.keys(pluginsRegistry).map((eventName) => {
   });
 
   // console.log("Registering a global event listener for plugins");
-  // for await (const event of on(eventEmitter, eventName)) 
+  // for await (const event of on(eventEmitter, eventName))
   //   listenAndNotifyPlugins(eventName, event);
 })
 
@@ -110,28 +116,48 @@ const obtainObjectId = (id: string | undefined, idBase: string | undefined): str
 
 const appRouter = router({
   createPost: protectedProcedure
-    .input(Update.omit({ id: true }))
+    .input(z.object({ idBase: z.string().optional(), data: Update.omit({ id: true }) }))
     .mutation(async ({ ctx, input }) => {
-      const attachments = input.attachments;
-      const uploadedAttachments = (await Promise.all(attachments.map(async (attachment) => {
-        const filename = `${uuidv4()}.${attachment.type.split("/")[1]}`;
-        return await uploadAttachment(attachment, filename);
-      }))).filter(a => a);
+
+      console.log("Received request to create post");
+    const presignedUrls = await Promise.all(input.data.attachments.map(async (file) => {
+      if (file.type.endsWith("mp4") || file.type.endsWith("mov") || file.type.endsWith("webm")) {
+        console.log("video file url", file);
+        const videoAsset = await mux.video.assets.create({
+          inputs: [ { url: file.url! } ],
+          playback_policies: ["public"]
+        });
+
+        // This is a Mux video stream
+        const playbackUrl = `https://stream.mux.com/${videoAsset.playback_ids![0].id}.m3u8`;
+        // console.log("video playback url", playbackUrl);
+
+        return playbackUrl;
+      }
+      return await makeSignedUrl(`${uuidv4()}.${file.type.split("/")[1]}`, file.type)
+    }
+    ));
 
       const payload = {
-        ...input,
-        attachments: uploadedAttachments.join(","),
-        userId: ctx.user.id
+        ...input.data,
+        attachments: presignedUrls.map(u => u.split("?")[0]).join(","),
+        userId: ctx.user.id,
+        ...(input.idBase ? { id: deterministicUUID(input.idBase) } : {} )
       };
+
+      console.log("creating post with payload", payload);
 
       // create the post in the db here
       const [ newPost ] = await db.insert(updates).values(payload).returning();
 
       // emit a create post event
       eventEmitter.emit("createPost", newPost.id.toString(), newPost);
+      return { success: true, data: { ...newPost, attachments: presignedUrls } };
     }),
-  getFeed: protectedProcedure.input(z.number()).query(async (opts) => {
+  getFeed: publicProcedure.input(z.number()).query(async (opts) => {
     const latestUpdates = await db.select().from(updates).limit(50).orderBy(desc(updates.postTime))
+      .leftJoin(reactions, eq(updates.id, reactions.updateId))
+      .leftJoin(reactionSource, eq(reactions.reaction, reactionSource.name));
 
     return latestUpdates;
   }),
@@ -145,19 +171,21 @@ const appRouter = router({
       // verify and make sure the post belongs to the user
       const posts = await db.select().from(updates).where(and(eq(updates.id, id!), eq(updates.userId, ctx.user.id)));
       if (posts.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Could not find a post with that id" });
       }
 
+      // TODO: Should delete all attachments that changed
       const payload = {
         ...input.body,
-        ...(input.body.attachments ? { 
+        ...(input.body.attachments ? {
           attachments: (await Promise.all(
             input.body.attachments.map(async a => await uploadAttachment(a, `${uuidv4()}.${a.type.split("/")[1]}`))
-          )).filter(a => a).join(",") 
+          )).filter(a => a).join(",")
         } : {})
       } as Omit<z.infer<typeof Update>, 'attachments'> & { attachments: string };
 
       // update a post with the specified ID
-      await db.update(updates).set(payload).where(eq(updates.id, input.id!))
+      await db.update(updates).set(payload).where(eq(updates.id, id))
     }),
     deletePost: protectedProcedure.input(z.object({ id: z.string().optional(), idBase: z.string().optional() })).mutation(async (opts) => {
       const { input, ctx } = opts;
@@ -166,6 +194,7 @@ const appRouter = router({
 
       // verify and make sure the post belongs to the user
       const post = await db.select().from(updates).where(eq(updates.id, id));
+      if (post.length === 0) return { success: false, data: "This post does not exist" }
       if (post[0].userId !== ctx.user.id) {
         throw new TRPCError({ code: "FORBIDDEN", message: "You are not allowed to delete this post" });
       }
@@ -173,7 +202,7 @@ const appRouter = router({
       // delete the post
       await db.delete(updates).where(eq(updates.id, id));
     }),
-  reactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional(), reaction: z.string()})).mutation(async (opts) => {
+  reactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional(), reactionType: z.union([z.literal("URL"), z.literal("UNICODE")]), reaction: z.union([z.url(), z.string()])})).mutation(async (opts) => {
     const { input, ctx } = opts;
     const postId = obtainObjectId(input.postId, input.idBase);
 
@@ -181,22 +210,22 @@ const appRouter = router({
     const reaction = await db.select().from(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id)));
     if (reaction.length == 0) {
       // create the reaction
-      const [ newReaction ] = await db.insert(reactions).values({ updateId: postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime() }).returning();
+      const [ newReaction ] = await db.insert(reactions).values({ updateId: postId, userId: ctx.user.id, reaction: input.reaction, reactionTime: new Date().getTime(), reactionType: input.reactionType }).returning();
       eventEmitter.emit("reactToPost", newReaction.id.toString(), newReaction);
     }
 
   }),
-  unreactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional() })).mutation(async (opts) => {
+  unreactToPost: protectedProcedure.input(z.object({ postId: z.string().optional(), idBase: z.string().optional(), reactionId: z.string() })).mutation(async (opts) => {
     const { input, ctx } = opts;
 
     const postId = obtainObjectId(input.postId, input.idBase);
     // delete the reaction
-    await db.delete(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id)));
+    await db.delete(reactions).where(and(eq(reactions.updateId, postId), eq(reactions.userId, ctx.user.id), eq(reactions.id, input.reactionId)));
   }),
   onPost: protectedProcedure.input(z.object({ lastPostId: z.string().nullish(), })).subscription(async function* (opts) {
     const { ctx, input } = opts;
     const { lastPostId } = input;
-    
+
     const eePostIterable = eventEmitter.toIterable("createPost", {
       signal: opts.signal
     });
@@ -206,7 +235,7 @@ const appRouter = router({
     if (lastPostId) {
       // get the post time of the post with the last id
       const [ postWithId ] = await db.select().from(updates).where(eq(updates.id, lastPostId));
-      lastPostCreatedTime = postWithId.postTime; 
+      lastPostCreatedTime = postWithId.postTime;
     } else {
       const [ lastPost ] = await db.select().from(updates).orderBy(desc(updates.postTime)).limit(1);
       lastPostCreatedTime = lastPost.postTime;
@@ -234,7 +263,7 @@ const appRouter = router({
     let lastReactionTime;
     if (input.lastPostId) {
       const [ reaction ] = await db.select().from(reactions).where(eq(updates.id, input.lastPostId));
-      lastReactionTime = reaction.reactionTime; 
+      lastReactionTime = reaction.reactionTime;
     } else {
       const [ reaction ] = await db.select().from(reactions).orderBy(desc(reactions.reactionTime));
       lastReactionTime = reaction.reactionTime;

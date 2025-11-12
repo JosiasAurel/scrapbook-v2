@@ -6,18 +6,10 @@ import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
 // load environment variables
 config();
 
-// export const accountsTable = sqliteTable("accounts_table", {
-//     id: int().primaryKey({ autoIncrement: true }),
-//     email: text().notNull(),
-//     username: text().notNull(),
-//     streakCount: int().notNull(),
-//     timezone: int().notNull(),
-// });
-
 const UUID_NAMESPACE = '964fe082-b01d-44fe-b0a0-e3d6e7a495e9';
 export const deterministicUUID = (input: string) => uuidv5(input, UUID_NAMESPACE);
 
-export const updates = sqliteTable("updates_table", {
+export const updates = sqliteTable("updates", {
     id: text("id").primaryKey().$defaultFn(() => uuidv4()),
     // id: int().primaryKey({ autoIncrement: true }),
     postTime: int().notNull(), // timestamp
@@ -101,9 +93,9 @@ export const reactions = sqliteTable("reactions", {
   // updateId: int().notNull().references(() => updates.id, { onDelete: "cascade" }),
   updateId: text().notNull().references(() => updates.id, { onDelete: "cascade" }),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  reactionType: text("reaction_type").notNull(),
   reaction: text("reaction").notNull(),
-  reactionTime: int().notNull()
+  reactionTime: int().notNull(),
 });
 
 export const db = drizzle(process.env.DB_FILE_NAME!);
-
