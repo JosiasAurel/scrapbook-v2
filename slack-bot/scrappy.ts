@@ -33,7 +33,7 @@ const trpcClient = createTRPCClient<AppRouter>({
       url: `${serverUrl}/trpc`,
       async headers() {
         const headers = new Headers();
-        headers.set("Authorization", "Bearer BjdAfmINXk0eamQhFQpP9wq4HaH2ZNNA"); // TODO: Replace token with variable - This is an app token
+        headers.set("Authorization", "Bearer BqfbcYRBBEO1UTS8E1YFuJvSwu1NHdPw"); // TODO: Replace token with variable - This is an app token
         return headers;
       },
     }),
@@ -43,6 +43,10 @@ const trpcClient = createTRPCClient<AppRouter>({
 // slack tokens
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
+
+if (!SLACK_SIGNING_SECRET || !SLACK_BOT_TOKEN) {
+  throw new Error("Missing SLACK_SIGNING_SECRET or SLACK_BOT_TOKEN in env");
+}
 
 // Initialize slack bot
 const scrappy = new App({
@@ -117,7 +121,7 @@ scrappy.event("message", async (thing) => {
           postTime: Number(message.ts) * 1000, // timestamp in milliseconds
           source: `SLACK`,
           // accountId: message.user, // this should be the actual user ID of the person
-          accountId: "03UNU8wTeqbdVKCXXck9EvlMddypcNqf",
+          accountId: "98BgQZ6ghF1aDHyykAXpFmZfkXWk1Cfw",
           text: message.text!,
           attachments: blobs.map(blob => ({ type: blob.type, url: blob.url })),
         },
@@ -199,6 +203,10 @@ async function runApp() {
   //   text: "Scrapbookv2 Bot Running",
   // });
 }
+
+scrappy.error((err) => {
+  console.error("[slack-bolt] error", err);
+});
 
 export function getUrls(text) {
   /**

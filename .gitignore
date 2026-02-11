@@ -3,3 +3,4 @@ server/.env
 .env
 server/local.db
 .DS_Store
+slack-bot/ngrok.exe

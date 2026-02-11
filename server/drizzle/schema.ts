@@ -64,7 +64,7 @@ export const users = sqliteTable("users", {
 export const verifications = sqliteTable("verifications", {
 	id: text().primaryKey().notNull(),
 	identifier: text().notNull(),
-	value: text().notNull(),
+	value: text({ mode: 'json' }).notNull(),
 	expiresAt: integer("expires_at").notNull(),
 	createdAt: integer("created_at"),
 	updatedAt: integer("updated_at"),

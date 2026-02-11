@@ -15,7 +15,6 @@ const s3 = new S3Client({
   }
 });
 
-// export async function uploadAttachment(stream: ReadableStream, filetype: string): Promise<string | undefined> {
 export async function uploadAttachment(arrayBuffer: ArrayBuffer, filetype: string): Promise<string | undefined> {
     const bodyData = Buffer.from(arrayBuffer);
     const upload = new Upload({
